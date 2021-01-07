@@ -23,11 +23,14 @@ public class Messages extends NLS {
 	public static String ImportIDFProjectWizardPage_7;
 	public static String ImportIDFProjectWizardPage_8;
 	public static String ImportIDFProjectWizardPage_9;
+	public static String ImportIDFProjectWizardPage_CopyIntoWorkspace;
 	public static String NewIDFProjectWizard_NewIDFProject;
 	public static String NewIDFProjectWizard_Project_Title;
 	public static String NewIDFProjectWizard_ProjectDesc;
-	public static String NewIDFProjectWizard_TaskName;
 	public static String NewIDFProjectWizard_TemplatesHeader;
+	public static String WizardNewProjectCreationPage_NameCantIncludeSpaceErr;
+	public static String WizardNewProjectCreationPage_WorkspaceLocCantIncludeSpaceErr;
+	
 	static {
 		// initialize resource bundle
 		NLS.initializeMessages(BUNDLE_NAME, Messages.class);

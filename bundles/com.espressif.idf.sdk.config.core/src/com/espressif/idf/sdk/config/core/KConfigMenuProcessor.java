@@ -16,6 +16,8 @@ import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
 
+import com.espressif.idf.core.util.SDKConfigUtil;
+
 /**
  * @author Kondal Kolipaka <kondal.kolipaka@espressif.com>
  *
@@ -79,6 +81,7 @@ public class KConfigMenuProcessor
 			JSONObject jsonObject = (JSONObject) iterator.next();
 
 			childMenu.setName((String) jsonObject.get("name")); //$NON-NLS-1$
+			childMenu.setId((String) jsonObject.get("id")); //$NON-NLS-1$
 			childMenu.setType((String) jsonObject.get("type")); //$NON-NLS-1$
 			childMenu.setHelp((String) jsonObject.get("help")); //$NON-NLS-1$
 

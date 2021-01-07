@@ -18,21 +18,23 @@ import org.eclipse.cdt.cmake.core.ICMakeToolChainManager;
 import org.eclipse.cdt.core.CCorePlugin;
 import org.eclipse.cdt.core.build.IToolChainManager;
 import org.eclipse.cdt.core.envvar.IEnvironmentVariable;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.osgi.util.NLS;
 
-import com.aptana.core.util.ProcessRunner;
-import com.aptana.core.util.StringUtil;
 import com.espressif.idf.core.IDFConstants;
 import com.espressif.idf.core.IDFCorePlugin;
 import com.espressif.idf.core.IDFEnvironmentVariables;
+import com.espressif.idf.core.ProcessBuilderFactory;
 import com.espressif.idf.core.build.ESPToolChainManager;
 import com.espressif.idf.core.build.ESPToolChainProvider;
 import com.espressif.idf.core.logging.Logger;
 import com.espressif.idf.core.util.IDFUtil;
+import com.espressif.idf.core.util.StringUtil;
 
 /**
  * IDF Tools install command handler
@@ -67,11 +69,14 @@ public class InstallToolsHandler extends AbstractToolsHandler
 				monitor.setTaskName(Messages.InstallToolsHandler_ExportingPathsMsg);
 				handleToolsExport();
 				monitor.worked(1);
-
+				console.println(Messages.InstallToolsHandler_ConfiguredBuildEnvVarMsg);
+				
 				monitor.setTaskName(Messages.InstallToolsHandler_AutoConfigureToolchain);
 				configureToolChain();
 				monitor.worked(1);
-
+				console.println(Messages.InstallToolsHandler_ConfiguredCMakeMsg);
+				
+				console.println(Messages.InstallToolsHandler_ToolsCompleted);
 				return Status.OK_STATUS;
 			}
 
@@ -115,20 +120,18 @@ public class InstallToolsHandler extends AbstractToolsHandler
 	protected void handleToolsExport()
 	{
 		List<String> arguments = new ArrayList<String>();
-		arguments.add(pythonPath);
+		arguments.add(pythonExecutablenPath);
 		arguments.add(IDFUtil.getIDFToolsScriptFile().getAbsolutePath());
 		arguments.add(IDFConstants.TOOLS_EXPORT_CMD);
 		arguments.add(IDFConstants.TOOLS_EXPORT_CMD_FORMAT_VAL);
 
 		console.println(Messages.AbstractToolsHandler_ExecutingMsg + " " + getCommandString(arguments)); //$NON-NLS-1$
 
-		ProcessRunner processRunner = new ProcessRunner();
+		ProcessBuilderFactory processRunner = new ProcessBuilderFactory();
 		IStatus status = null;
 		try
 		{
-			status = processRunner.runInBackground(Path.ROOT, getEnvironment(Path.ROOT),
-					arguments.toArray(new String[arguments.size()]));
-			console.println(status.getMessage());
+			status = processRunner.runInBackground(arguments, Path.ROOT, System.getenv());
 		}
 		catch (Exception e1)
 		{
@@ -136,10 +139,10 @@ public class InstallToolsHandler extends AbstractToolsHandler
 		}
 
 		Logger.log(IDFCorePlugin.getPlugin(), status);
-		if (status != null && status.isOK())
+		if (status != null)
 		{
 			String exportCmdOp = status.getMessage();
-
+			console.println(exportCmdOp);
 			processExportCmdOutput(exportCmdOp);
 		}
 
@@ -151,11 +154,11 @@ public class InstallToolsHandler extends AbstractToolsHandler
 		String[] exportEntries = exportCmdOp.split("\n"); //$NON-NLS-1$
 		for (String entry : exportEntries)
 		{
-			entry = entry.replaceAll("\\r", ""); //$NON-NLS-1$
+			entry = entry.replaceAll("\\r", ""); //$NON-NLS-1$ //$NON-NLS-2$
 			String[] keyValue = entry.split("="); //$NON-NLS-1$
 			if (keyValue.length == 2) // 0 - key, 1 - value
 			{
-				String msg = MessageFormat.format("Key: {0} Value: {1}", keyValue[0], keyValue[1]); //$NON-NLS-1$ //$NON-NLS-2$
+				String msg = MessageFormat.format("Key: {0} Value: {1}", keyValue[0], keyValue[1]); //$NON-NLS-1$
 				Logger.log(msg);
 
 				IDFEnvironmentVariables idfEnvMgr = new IDFEnvironmentVariables();
@@ -164,8 +167,9 @@ public class InstallToolsHandler extends AbstractToolsHandler
 				if (key.equals(IDFEnvironmentVariables.PATH))
 				{
 					value = replacePathVariable(value);
+					value = appendGitToPath(value, gitExecutablePath);
 				}
-				
+
 				IEnvironmentVariable env = idfEnvMgr.getEnv(key);
 
 				// Environment variable not found
@@ -185,13 +189,13 @@ public class InstallToolsHandler extends AbstractToolsHandler
 					String[] oldPathEntries = oldPath.split(File.pathSeparator);
 
 					// Prepare a new set of entries
-					Set<String> newPathSet = new LinkedHashSet<>(); //Order is important here, check IEP-60
-					
+					Set<String> newPathSet = new LinkedHashSet<>(); // Order is important here, check IEP-60
+
 					// Process a new PATH
 					String[] newPathEntries = value.split(File.pathSeparator);
 					newPathSet.addAll(Arrays.asList(newPathEntries));
-					
-					//Add old entries
+
+					// Add old entries
 					newPathSet.addAll(Arrays.asList(oldPathEntries));
 
 					// Prepare PATH string
@@ -217,28 +221,53 @@ public class InstallToolsHandler extends AbstractToolsHandler
 
 		}
 	}
-	
+
 	private String replacePathVariable(String value)
 	{
-		//Get system PATH
+		// Get system PATH
 		Map<String, String> systemEnv = new HashMap<>(System.getenv());
 		String pathEntry = systemEnv.get("PATH"); //$NON-NLS-1$
 		if (pathEntry == null)
 		{
 			pathEntry = systemEnv.get("Path"); // for Windows //$NON-NLS-1$
-			if (pathEntry == null)  // no idea
+			if (pathEntry == null) // no idea
 			{
 				Logger.log(new Exception("No PATH found in the system environment variables")); //$NON-NLS-1$
 			}
 		}
-		
+
 		if (!StringUtil.isEmpty(pathEntry))
 		{
-			value = value.replace("$PATH", pathEntry); //macOS
-			value = value.replace("%PATH%", pathEntry); //Windows
+			value = value.replace("$PATH", pathEntry); // macOS //$NON-NLS-1$
+			value = value.replace("%PATH%", pathEntry); // Windows //$NON-NLS-1$
 		}
 		return value;
 	}
 
+	/**
+	 * Append the git directory to the existing CDT build environment PATH variable
+	 * 
+	 * @param path CDT build environment PATH
+	 * @param gitExecutablePath
+	 * @return PATH value with git appended
+	 */
+	public String appendGitToPath(String path, String gitExecutablePath)
+	{
+		IPath gitPath = new Path(gitExecutablePath);
+		if (!gitPath.toFile().exists())
+		{
+			Logger.log(NLS.bind("{0} doesn't exist", gitExecutablePath)); //$NON-NLS-1$
+			return path;
+		}
+
+		String gitDir = gitPath.removeLastSegments(1).toOSString(); // ../bin/git
+		if (!StringUtil.isEmpty(path) && !path.contains(gitDir)) // Git not found on the CDT build PATH environment
+		{
+			return path.concat(";").concat(gitDir); // append git path //$NON-NLS-1$
+		}
+		return path;
+	}
+
+	
 
 }

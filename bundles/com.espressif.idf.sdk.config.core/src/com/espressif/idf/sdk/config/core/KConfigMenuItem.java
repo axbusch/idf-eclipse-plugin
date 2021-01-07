@@ -19,9 +19,9 @@ public class KConfigMenuItem
 	private String help;
 	private String name;
 	private KConfigMenuItem parent;
-	private String range;
 	private String title;
 	private String type;
+	private String id;
 
 	public KConfigMenuItem(KConfigMenuItem parent)
 	{
@@ -49,14 +49,14 @@ public class KConfigMenuItem
 		return name;
 	}
 
+	public String getId()
+	{
+		return id;
+	}
+
 	public KConfigMenuItem getParent()
 	{
 		return parent;
-	}
-
-	public String getRange()
-	{
-		return range;
 	}
 
 	public String getTitle()
@@ -89,9 +89,9 @@ public class KConfigMenuItem
 		this.name = name;
 	}
 
-	public void setRange(String range)
+	public void setId(String name)
 	{
-		this.range = range;
+		this.id = name;
 	}
 
 	public void setTitle(String title)
@@ -103,19 +103,19 @@ public class KConfigMenuItem
 	{
 		this.type = type;
 	}
-	
+
 	public boolean isVisible(JSONObject visibleJsonMap)
 	{
 		if (visibleJsonMap == null || visibleJsonMap.isEmpty())
 		{
 			return false;
 		}
-		
+
 		if (getType() != null && getType().equals(IJsonServerConfig.MENU_TYPE))
 		{
 			return isVisible(children, visibleJsonMap);
 		}
-		return isVisible(visibleJsonMap, getName());
+		return isVisible(visibleJsonMap, getId());
 	}
 
 	private boolean isVisible(List<KConfigMenuItem> children, JSONObject visibleJsonMap)
@@ -123,13 +123,10 @@ public class KConfigMenuItem
 		for (KConfigMenuItem kConfigMenuItem : children)
 		{
 			String type = kConfigMenuItem.getType();
-			String configKey = kConfigMenuItem.getName();
-			boolean isVisible = false; 
-			if (type.equals(IJsonServerConfig.STRING_TYPE)
-					|| type.equals(IJsonServerConfig.HEX_TYPE)
-					|| type.equals(IJsonServerConfig.BOOL_TYPE)
-					|| type.equals(IJsonServerConfig.INT_TYPE)
-					)
+			String configKey = kConfigMenuItem.getId();
+			boolean isVisible = false;
+			if (type.equals(IJsonServerConfig.STRING_TYPE) || type.equals(IJsonServerConfig.HEX_TYPE)
+					|| type.equals(IJsonServerConfig.BOOL_TYPE) || type.equals(IJsonServerConfig.INT_TYPE))
 			{
 				isVisible = isVisible(visibleJsonMap, configKey);
 				if (isVisible)
@@ -142,7 +139,7 @@ public class KConfigMenuItem
 				List<KConfigMenuItem> choiceItems = kConfigMenuItem.getChildren();
 				for (KConfigMenuItem item : choiceItems)
 				{
-					String localConfigKey = item.getName();
+					String localConfigKey = item.getId();
 					isVisible = isVisible(visibleJsonMap, localConfigKey);
 					if (isVisible)
 					{
@@ -152,7 +149,7 @@ public class KConfigMenuItem
 			}
 			else if (type.equals(IJsonServerConfig.MENU_TYPE))
 			{
-				
+
 				return isVisible(kConfigMenuItem.getChildren(), visibleJsonMap);
 			}
 		}
@@ -161,6 +158,6 @@ public class KConfigMenuItem
 
 	private boolean isVisible(JSONObject visibleJsonMap, String configKey)
 	{
-		return visibleJsonMap.get(configKey) != null ? (boolean) visibleJsonMap.get(configKey): false;
+		return visibleJsonMap.get(configKey) != null ? (boolean) visibleJsonMap.get(configKey) : false;
 	}
 }

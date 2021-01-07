@@ -15,8 +15,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 
+import org.eclipse.cdt.build.gcc.core.GCCToolChain;
 import org.eclipse.cdt.build.gcc.core.GCCToolChain.GCCInfo;
 import org.eclipse.cdt.cmake.core.ICMakeToolChainFile;
 import org.eclipse.cdt.cmake.core.ICMakeToolChainManager;
@@ -30,11 +32,10 @@ import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 
-import com.aptana.core.ShellExecutable;
-import com.aptana.core.util.ProcessRunner;
 import com.espressif.idf.core.IDFConstants;
 import com.espressif.idf.core.IDFCorePlugin;
 import com.espressif.idf.core.IDFEnvironmentVariables;
+import com.espressif.idf.core.ProcessBuilderFactory;
 import com.espressif.idf.core.logging.Logger;
 import com.espressif.idf.core.util.IDFUtil;
 import com.espressif.idf.core.util.StringUtil;
@@ -68,6 +69,7 @@ public class ESPToolChainManager
 	 */
 	public void initToolChain(IToolChainManager manager, IToolChainProvider toolchainProvider)
 	{
+		Logger.log("Initializing toolchain..."); //$NON-NLS-1$
 		List<String> paths = new ArrayList<String>();
 		String idfToolsExportPath = getIdfToolsExportPath();
 		if (idfToolsExportPath != null)
@@ -79,10 +81,10 @@ public class ESPToolChainManager
 			paths = getAllPaths();
 		}
 		Logger.log(paths.toString());
-		
-		//remove null paths if any
+
+		// remove null paths if any
 		paths.removeIf(Objects::isNull);
-		
+
 		for (String path : paths)
 		{
 			for (String dirStr : path.split(File.pathSeparator))
@@ -105,10 +107,17 @@ public class ESPToolChainManager
 								if (info.target != null && info.version != null)
 								{
 									String[] tuple = info.target.split("-"); //$NON-NLS-1$
-									if (tuple.length > 2) // xtensa-esp32-elf
+									if (tuple.length > 2)
 									{
-
-										ESPToolChain gcc = new ESPToolChain(toolchainProvider, file.toPath());
+										GCCToolChain gcc = null;
+										if (tuple[1].equals(ESPToolChain.OS))
+										{
+											gcc = new ESPToolChain(toolchainProvider, file.toPath());
+										}
+										else
+										{
+											gcc = new ESP32S2ToolChain(toolchainProvider, file.toPath());
+										}
 										try
 										{
 											if (manager.getToolChain(gcc.getTypeId(), gcc.getId()) == null)
@@ -154,12 +163,6 @@ public class ESPToolChainManager
 			paths.add(path);
 		}
 
-		path = ShellExecutable.getEnvironment().get(IDFEnvironmentVariables.PATH);
-		if (!StringUtil.isEmpty(path))
-		{
-			paths.add(path);
-		}
-
 		return paths;
 	}
 
@@ -175,11 +178,24 @@ public class ESPToolChainManager
 			Logger.log("idf_tools.py path doesn't exist"); //$NON-NLS-1$
 			return null;
 		}
+		
+		String idfPythonEnvPath = IDFUtil.getIDFPythonEnvPath();
 
 		try
 		{
-			IStatus idf_tools_export_status = new ProcessRunner().runInBackground(tools_path,
-					IDFConstants.TOOLS_EXPORT_CMD, IDFConstants.TOOLS_EXPORT_CMD_FORMAT_VAL);
+			List<String> commands = new ArrayList<String>();
+			if (!StringUtil.isEmpty(idfPythonEnvPath))
+			{
+				commands.add(idfPythonEnvPath);
+			}
+			commands.add(tools_path);
+			commands.add(IDFConstants.TOOLS_EXPORT_CMD);
+			commands.add(IDFConstants.TOOLS_EXPORT_CMD_FORMAT_VAL);
+			
+			Logger.log(commands.toString());
+
+			IStatus idf_tools_export_status = new ProcessBuilderFactory().runInBackground(commands,
+					org.eclipse.core.runtime.Path.ROOT, System.getenv());
 			if (idf_tools_export_status != null && idf_tools_export_status.isOK())
 			{
 				String message = idf_tools_export_status.getMessage();
@@ -193,7 +209,7 @@ public class ESPToolChainManager
 						if (keyValue.length == 2 && keyValue[0].equals(IDFEnvironmentVariables.PATH)) // 0 - key, 1 -
 																										// value
 						{
-							Logger.log("PATH: " + keyValue[1]);
+							Logger.log("PATH: " + keyValue[1]); //$NON-NLS-1$
 							return keyValue[1];
 						}
 					}
@@ -209,48 +225,61 @@ public class ESPToolChainManager
 
 	public void initCMakeToolChain(IToolChainManager tcManager, ICMakeToolChainManager manager)
 	{
-		Map<String, String> properties = new HashMap<>();
-		properties.put(IToolChain.ATTR_OS, ESPToolChain.OS);
-		properties.put(IToolChain.ATTR_ARCH, ESPToolChain.ARCH);
-		try
+		String idfPath = IDFUtil.getIDFPath();
+		if (StringUtil.isEmpty(idfPath)) // not yet configured
 		{
-			for (IToolChain tc : tcManager.getToolChainsMatching(properties))
+			return;
+		}
+		Map<String, String> toolchainMap = new HashMap<String, String>();
+		toolchainMap.put(ESPToolChain.OS, ESPCMakeToolChainProvider.TOOLCHAIN_ESP32_CMAKE);
+		toolchainMap.put(ESP32S2ToolChain.OS, ESP32S2CMakeToolChainProvider.TOOLCHAIN_ESP32_CMAKE);
+
+		Set<String> keySet = toolchainMap.keySet();
+		for (String model : keySet)
+		{
+			Map<String, String> properties = new HashMap<>();
+			properties.put(IToolChain.ATTR_OS, model);
+			properties.put(IToolChain.ATTR_ARCH, ESPToolChain.ARCH);
+
+			try
 			{
-
-				String idfPath = IDFUtil.getIDFPath();
-				if (!new File(idfPath).exists())
+				for (IToolChain tc : tcManager.getToolChainsMatching(properties))
 				{
-					String errorMsg = MessageFormat.format(Messages.ESP32CMakeToolChainProvider_PathDoesnNotExist,
-							idfPath);
-					throw new CoreException(new Status(IStatus.ERROR, IDFCorePlugin.PLUGIN_ID, errorMsg));
-				}
 
-				// add the newly found IDF_PATH to the eclipse environment variables if it's not there
-				IDFEnvironmentVariables idfEnvMgr = new IDFEnvironmentVariables();
-				if (!new File(idfEnvMgr.getEnvValue(IDFEnvironmentVariables.IDF_PATH)).exists())
-				{
-					idfEnvMgr.addEnvVariable(IDFEnvironmentVariables.IDF_PATH, idfPath);
-				}
+					if (!new File(idfPath).exists())
+					{
+						String errorMsg = MessageFormat.format(Messages.ESP32CMakeToolChainProvider_PathDoesnNotExist,
+								idfPath);
+						throw new CoreException(new Status(IStatus.ERROR, IDFCorePlugin.PLUGIN_ID, errorMsg));
+					}
 
-				Path toolChainFile = Paths.get(getIdfCMakePath(idfPath))
-						.resolve(ESPCMakeToolChainProvider.TOOLCHAIN_ESP32_CMAKE);
-				if (Files.exists(toolChainFile))
-				{
-					ICMakeToolChainFile file = manager.newToolChainFile(toolChainFile);
-					file.setProperty(IToolChain.ATTR_OS, ESPToolChain.OS);
-					file.setProperty(IToolChain.ATTR_ARCH, ESPToolChain.ARCH);
+					// add the newly found IDF_PATH to the eclipse environment variables if it's not there
+					IDFEnvironmentVariables idfEnvMgr = new IDFEnvironmentVariables();
+					if (!new File(idfEnvMgr.getEnvValue(IDFEnvironmentVariables.IDF_PATH)).exists())
+					{
+						idfEnvMgr.addEnvVariable(IDFEnvironmentVariables.IDF_PATH, idfPath);
+					}
 
-					file.setProperty(ICBuildConfiguration.TOOLCHAIN_TYPE, tc.getTypeId());
-					file.setProperty(ICBuildConfiguration.TOOLCHAIN_ID, tc.getId());
+					Path toolChainFile = Paths.get(getIdfCMakePath(idfPath)).resolve(toolchainMap.get(model));
+					if (Files.exists(toolChainFile))
+					{
+						ICMakeToolChainFile file = manager.newToolChainFile(toolChainFile);
+						file.setProperty(IToolChain.ATTR_OS, model);
+						file.setProperty(IToolChain.ATTR_ARCH, ESPToolChain.ARCH);
 
-					manager.addToolChainFile(file);
+						file.setProperty(ICBuildConfiguration.TOOLCHAIN_TYPE, tc.getTypeId());
+						file.setProperty(ICBuildConfiguration.TOOLCHAIN_ID, tc.getId());
+
+						manager.addToolChainFile(file);
+					}
 				}
 			}
+			catch (CoreException e)
+			{
+				IDFCorePlugin.getPlugin().getLog().log(e.getStatus());
+			}
 		}
-		catch (CoreException e)
-		{
-			IDFCorePlugin.getPlugin().getLog().log(e.getStatus());
-		}
+
 	}
 
 	protected String getIdfCMakePath(String idfPath)

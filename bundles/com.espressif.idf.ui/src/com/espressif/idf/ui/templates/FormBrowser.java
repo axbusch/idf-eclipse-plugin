@@ -1,3 +1,7 @@
+/*******************************************************************************
+ * Copyright 2018-2019 Espressif Systems (Shanghai) PTE LTD. All rights reserved.
+ * Use is subject to license terms.
+ *******************************************************************************/
 
 package com.espressif.idf.ui.templates;
 
@@ -69,7 +73,7 @@ public class FormBrowser {
 			}
 			catch (Exception e)
 			{
-				Status status = new Status(IStatus.ERROR, IDFCorePlugin.PLUGIN_ID, "Error parsing the template description", e);
+				Status status = new Status(IStatus.ERROR, IDFCorePlugin.PLUGIN_ID, "Error parsing the template description", e); //$NON-NLS-1$
 				IDFCorePlugin.getPlugin().getLog().log(status);
 			}
 	}

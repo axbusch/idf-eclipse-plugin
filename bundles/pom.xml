@@ -22,8 +22,11 @@
 		<module>com.espressif.idf.launch.serial.ui</module>
 		<module>com.espressif.idf.sdk.config.ui</module>
 		<module>com.espressif.idf.sdk.config.core</module>
-		<module>com.aptana.core</module>
 		<module>com.espressif.idf.help</module>
+		<module>com.espressif.idf.terminal.connector</module>
+		<module>com.espressif.idf.terminal.connector.serial</module>
+		<module>com.espressif.idf.branding</module>
+		<module>com.espressif.idf.debug.gdbjtag.openocd</module>
 	</modules>
 	
 	<build>

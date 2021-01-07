@@ -18,8 +18,10 @@ import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Path;
 import org.osgi.framework.Bundle;
 
+import com.espressif.idf.core.IDFConstants;
 import com.espressif.idf.core.IDFProjectNature;
 import com.espressif.idf.core.logging.Logger;
 import com.espressif.idf.core.util.FileUtil;
@@ -34,11 +36,13 @@ public class IDFProjectGenerator extends CMakeProjectGenerator
 {
 
 	private File sourceTemplatePath;
+	private boolean copyIntoWorkspace;
 
-	public IDFProjectGenerator(String manifestFile, File source)
+	public IDFProjectGenerator(String manifestFile, File source, boolean copyIntoWorkspace)
 	{
 		super(manifestFile);
 		this.sourceTemplatePath = source;
+		this.copyIntoWorkspace = copyIntoWorkspace;
 	}
 
 	@Override
@@ -49,29 +53,36 @@ public class IDFProjectGenerator extends CMakeProjectGenerator
 		ICommand command = description.newCommand();
 		CBuilder.setupBuilder(command);
 		description.setBuildSpec(new ICommand[] { command });
+		if (!copyIntoWorkspace)
+		{
+			description.setLocation(new Path(sourceTemplatePath.getAbsolutePath()));
+		}
 	}
 
 	@Override
 	public void generate(Map<String, Object> model, IProgressMonitor monitor) throws CoreException
 	{
 		super.generate(model, monitor);
-		Logger.log("Source Template path:" + sourceTemplatePath);
+		Logger.log("Source Template path:" + sourceTemplatePath); //$NON-NLS-1$
 		if (sourceTemplatePath == null)
 		{
 			return; // let's go with the default generate
 		}
-		
+
 		// Target project
 		IProject project = getProject();
 
-		// copy IDF template resources
-		try
+		if (copyIntoWorkspace)
 		{
-			copyIDFTemplateToWorkspace(project.getName(), sourceTemplatePath, project);
-		}
-		catch (IOException e)
-		{
-			Logger.log(e);
+			// copy IDF template resources
+			try
+			{
+				copyIDFTemplateToWorkspace(project.getName(), sourceTemplatePath, project);
+			}
+			catch (IOException e)
+			{
+				Logger.log(e);
+			}
 		}
 
 		// refresh to see the copied resources in the project explorer
@@ -101,6 +112,12 @@ public class IDFProjectGenerator extends CMakeProjectGenerator
 
 		for (File file : files)
 		{
+			// Don't copy build folder as CMakeCache.txt file contains full path entries and leads to build issues.
+			if (file.getName().equals(IDFConstants.BUILD_FOLDER))
+			{
+				continue;
+			}
+
 			// create the file/directory
 			File dest = new File(projectFile, file.getName());
 			if (file.isDirectory())

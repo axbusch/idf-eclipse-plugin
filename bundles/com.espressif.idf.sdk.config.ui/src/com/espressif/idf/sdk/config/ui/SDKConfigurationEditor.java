@@ -6,6 +6,7 @@ package com.espressif.idf.sdk.config.ui;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.text.MessageFormat;
 import java.util.List;
 
@@ -24,6 +25,7 @@ import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.SelectionChangedEvent;
 import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.events.ModifyEvent;
 import org.eclipse.swt.events.ModifyListener;
@@ -50,6 +52,12 @@ import org.eclipse.ui.ISaveablePart;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.console.ConsolePlugin;
+import org.eclipse.ui.console.IConsole;
+import org.eclipse.ui.console.IConsoleConstants;
+import org.eclipse.ui.console.IConsoleManager;
+import org.eclipse.ui.console.MessageConsole;
+import org.eclipse.ui.console.MessageConsoleStream;
 import org.eclipse.ui.dialogs.FilteredTree;
 import org.eclipse.ui.dialogs.PatternFilter;
 import org.eclipse.ui.editors.text.TextEditor;
@@ -61,11 +69,11 @@ import org.json.simple.JSONObject;
 import org.json.simple.parser.ParseException;
 
 import com.espressif.idf.core.logging.Logger;
+import com.espressif.idf.core.util.SDKConfigUtil;
 import com.espressif.idf.core.util.StringUtil;
 import com.espressif.idf.sdk.config.core.IJsonServerConfig;
 import com.espressif.idf.sdk.config.core.KConfigMenuItem;
 import com.espressif.idf.sdk.config.core.KConfigMenuProcessor;
-import com.espressif.idf.sdk.config.core.SDKConfigUtil;
 import com.espressif.idf.sdk.config.core.server.CommandType;
 import com.espressif.idf.sdk.config.core.server.ConfigServerManager;
 import com.espressif.idf.sdk.config.core.server.IJsonConfigOutput;
@@ -102,6 +110,8 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 	private JSONObject valuesJsonMap;
 
 	private JSONObject visibleJsonMap;
+	
+	private JSONObject rangesJsonMap;
 
 	private String serverMessage;
 
@@ -113,6 +123,10 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 	private JSONObject modifiedJsonMap = new JSONObject();
 
 	private HelpPopupDialog infoDialog;
+
+	private CommandType type;
+
+	private ScrolledComposite sc;
 
 	public SDKConfigurationEditor()
 	{
@@ -151,11 +165,9 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 				monitor.worked(2);
 
 			}
-			catch (Exception e)
-			{
-				Logger.log(SDKConfigUIPlugin.getDefault(), e);
+			catch (Exception x) {
+				throw new InvocationTargetException(x, x.getMessage());
 			}
-
 		};
 		try
 		{
@@ -172,7 +184,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 			createErrorPage(errorMsg);
 			return;
 		}
-		
+
 		// 3. Build the UI
 		createDesignPage();
 		createSourcePage();
@@ -207,7 +219,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 	private void createDesignPage()
 	{
 
-		Composite parent = new Composite(getContainer(), SWT.V_SCROLL);
+		Composite parent = new Composite(getContainer(), SWT.NONE);
 
 		GridLayout layout = new GridLayout();
 		layout.numColumns = 2;
@@ -250,10 +262,16 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		treeViewer.setInput(initalInput);
 		treeViewer.expandToLevel(getComponentConfigElement(initalInput), 1);
 
+		sc = new ScrolledComposite(parent, SWT.H_SCROLL | SWT.V_SCROLL);
+		sc.setLayout((new GridLayout(1, false)));
+		GridData gridData = new GridData(SWT.FILL, SWT.FILL, true, true);
+		gridData.heightHint = 500;
+		sc.setLayoutData(gridData);
+
 		// UI for the selected element
-		updateUIComposite = new Group(parent, SWT.V_SCROLL);
+		updateUIComposite = new Group(sc, SWT.V_SCROLL);
 		updateUIComposite.setLayout((new GridLayout(1, false)));
-		GridData gridData = new GridData(SWT.NONE, SWT.NONE, true, true);
+		gridData = new GridData(SWT.FILL, SWT.FILL, true, true);
 		gridData.heightHint = 500;
 		updateUIComposite.setLayoutData(gridData);
 
@@ -335,20 +353,36 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 	protected void initConfigServer(IProject project) throws IOException, ParseException
 	{
 
+		// Create console
+		MessageConsole msgConsole = createConsole("JSON Configuration Server Console"); //$NON-NLS-1$
+		msgConsole.clearConsole();
+
+		MessageConsoleStream console = msgConsole.newMessageStream();
+		msgConsole.activate();
+		openConsoleView();
+
 		configServer = ConfigServerManager.INSTANCE.getServer(project);
 
 		// register the editor with the server to notify about the events
 		configServer.addListener(this);
+		configServer.addConsole(console);
 
 		// will wait and check for the server response
 		JsonConfigProcessor jsonProcessor = new JsonConfigProcessor();
-		final int MAX_NO_OF_ATTEMPTS = 15;
+
+		int MAX_NO_OF_ATTEMPTS = 120; // timeout
+		String sdkconfigTimeout = getSystemProperty("sdkconfig.timeout"); //$NON-NLS-1$
+		if (!StringUtil.isEmpty(sdkconfigTimeout))
+		{
+			MAX_NO_OF_ATTEMPTS = Integer.valueOf(sdkconfigTimeout);
+		}
 		if (isReady(MAX_NO_OF_ATTEMPTS, 1000, jsonProcessor))
 		{
 			String response = jsonProcessor.getInitialOutput(serverMessage);
 			IJsonConfigOutput output = configServer.getOutput(response, false);
 			valuesJsonMap = output.getValuesJsonMap();
 			visibleJsonMap = output.getVisibleJsonMap();
+			rangesJsonMap = output.getRangesJsonMap();
 		}
 	}
 
@@ -364,6 +398,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		IJsonConfigOutput output = configServer.getOutput(response, true);
 		valuesJsonMap = output.getValuesJsonMap();
 		visibleJsonMap = output.getVisibleJsonMap();
+		rangesJsonMap = output.getRangesJsonMap();
 
 	}
 
@@ -379,7 +414,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		int waitCount = 0;
 		while (serverMessage == null || jsonProcessor.getInitialOutput(serverMessage) == null)
 		{
-			if (waitCount >= maxAttempts)
+			if (type == CommandType.CONNECTION_CLOSED || waitCount >= maxAttempts)
 			{
 				return false;
 			}
@@ -407,8 +442,8 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		if (configServer != null)
 		{
 			configServer.destroy();
-			ConfigServerManager.INSTANCE.deleteServer(project);
 		}
+		ConfigServerManager.INSTANCE.deleteServer(project);
 		super.dispose();
 	}
 
@@ -506,6 +541,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		});
 	}
 
+	@SuppressWarnings("deprecation")
 	private FilteredTree createFilteredTree(Group group)
 	{
 		int style = SWT.SINGLE | SWT.H_SCROLL | SWT.V_SCROLL | SWT.BORDER;
@@ -544,8 +580,14 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		updateUIComposite.setLayoutData(updateCompsiteGD);
 
 		renderMenuItems(selectedElement);
+
+		sc.setContent(updateUIComposite);
+		sc.setExpandHorizontal(true);
+		sc.setExpandVertical(true);
+		sc.setMinSize(updateUIComposite.computeSize(SWT.DEFAULT, SWT.DEFAULT));
+		sc.setShowFocusedControl(true);
+
 		updateUIComposite.layout(true);
-		updateUIComposite.getParent().layout(true);
 	}
 
 	protected void renderMenuItems(KConfigMenuItem selectedElement)
@@ -555,7 +597,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		for (KConfigMenuItem kConfigMenuItem : children)
 		{
 			String type = kConfigMenuItem.getType();
-			String configKey = kConfigMenuItem.getName();
+			String configKey = kConfigMenuItem.getId();
 			Object configValue = valuesJsonMap.get(configKey);
 			boolean isVisible = (visibleJsonMap.get(configKey) != null ? (boolean) visibleJsonMap.get(configKey)
 					: false);
@@ -577,7 +619,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 					textControl.setText(newConfigValue != null ? (String) newConfigValue : (String) configValue);
 				}
 				textControl.addModifyListener(addModifyListener(configKey, textControl));
-				addTooltipImage(configKey, helpInfo);
+				addTooltipImage(kConfigMenuItem);
 
 			}
 			else if (isVisible && type.equals(IJsonServerConfig.HEX_TYPE))
@@ -596,7 +638,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 							: Long.toString((long) configValue));
 				}
 				textControl.addModifyListener(addModifyListener(configKey, textControl));
-				addTooltipImage(configKey, helpInfo);
+				addTooltipImage(kConfigMenuItem);
 			}
 			else if (isVisible && type.equals(IJsonServerConfig.BOOL_TYPE))
 			{
@@ -619,7 +661,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 					}
 
 				});
-				addTooltipImage(configKey, helpInfo);
+				addTooltipImage(kConfigMenuItem);
 			}
 
 			else if (isVisible && type.equals(IJsonServerConfig.INT_TYPE))
@@ -639,26 +681,21 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 
 				}
 				text.addModifyListener(addModifyListener(configKey, text));
-				addTooltipImage(configKey, helpInfo);
+				addTooltipImage(kConfigMenuItem);
 
+			}
+			else if (isVisible && type.equals(IJsonServerConfig.MENU_TYPE))
+			{
+				renderMenuItems(kConfigMenuItem);
 			}
 			else if (type.equals(IJsonServerConfig.CHOICE_TYPE))
 			{
 				Logger.logTrace(SDKConfigUIPlugin.getDefault(),
 						"Config key >" + configKey + " visiblity status >" + isVisible); //$NON-NLS-1$ //$NON-NLS-2$
-				List<KConfigMenuItem> choiceItems = kConfigMenuItem.getChildren();
-				for (KConfigMenuItem item : choiceItems)
+				
+				if (isExist(visibleJsonMap, configKey))
 				{
-					String localConfigKey = item.getName();
-					isVisible = (visibleJsonMap.get(localConfigKey) != null
-							? (boolean) visibleJsonMap.get(localConfigKey)
-							: false);
-					Logger.logTrace(SDKConfigUIPlugin.getDefault(),
-							"local key:" + localConfigKey + " Visibility >" + isVisible); //$NON-NLS-1$ //$NON-NLS-2$
-				}
-
-				if (isVisible)
-				{
+					List<KConfigMenuItem> choiceItems = kConfigMenuItem.getChildren();
 					Label labelName = new Label(updateUIComposite, SWT.NONE);
 					labelName.setText(kConfigMenuItem.getTitle());
 
@@ -672,18 +709,20 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 					int index = 0;
 					for (KConfigMenuItem item : choiceItems)
 					{
-						String localConfigKey = item.getName();
-						choiceCombo.add(item.getTitle());
-						choiceCombo.setData(item.getTitle(), localConfigKey);
-
-						isVisible = valuesJsonMap.get(localConfigKey) != null
-								? (boolean) valuesJsonMap.get(localConfigKey)
-								: false;
-						if (isVisible)
+						String localConfigKey = item.getId();
+						if (isExist(visibleJsonMap, localConfigKey))
 						{
-							choiceCombo.select(index);
+							choiceCombo.add(item.getTitle());
+							choiceCombo.setData(item.getTitle(), localConfigKey);
+							
+							//Check if this selected?
+							if (isExist(valuesJsonMap, localConfigKey))
+							{
+								choiceCombo.select(index);
+							}
+							index++;
 						}
-						index++;
+
 					}
 
 					choiceCombo.addSelectionListener(new SelectionAdapter()
@@ -701,7 +740,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 							}
 						}
 					});
-					addTooltipImage(configKey, helpInfo);
+					addTooltipImage(kConfigMenuItem);
 				}
 			}
 
@@ -714,27 +753,47 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 		}
 	}
 
-	protected boolean hasVisibility(String originalKey)
+	protected boolean isExist(JSONObject jsonMap, String key)
 	{
-		return visibleJsonMap.get(originalKey) != null ? (boolean) visibleJsonMap.get(originalKey) : false;
+		return jsonMap.get(key) != null ? (boolean) jsonMap.get(key) : false;
 	}
 
-	protected void addTooltipImage(String configKey, String helpInfo)
+	protected void addTooltipImage(KConfigMenuItem kConfigMenuItem)
 	{
 		Label labelName = new Label(updateUIComposite, SWT.NONE);
 		labelName.setImage(SDKConfigUIPlugin.getImage(ICONS_INFO_OBJ_GIF));
-		labelName.addListener(SWT.MouseUp, getMouseClickListener(configKey, helpInfo));
+		labelName.addListener(SWT.MouseUp, getMouseClickListener(kConfigMenuItem));
 		labelName.setToolTipText(Messages.SDKConfigurationEditor_Help);
 	}
 
-	private Listener getMouseClickListener(String configKey, String helpInfo)
+	private Listener getMouseClickListener(KConfigMenuItem kConfigMenuItem)
 	{
 		return new Listener()
 		{
 			@Override
 			public void handleEvent(Event event)
 			{
-				if (StringUtil.isEmpty(helpInfo))
+				String help = kConfigMenuItem.getHelp();
+				String title = kConfigMenuItem.getTitle();
+				String configKey = kConfigMenuItem.getId();
+				
+				//frame message
+				StringBuilder message = new StringBuilder();
+				message.append(title);
+				message.append("\n\n");
+				message.append(help);
+				
+				//get range info
+				Object range = rangesJsonMap.get(configKey);
+				if (range != null)
+				{
+					message.append("\n\n");
+					message.append("Range Information:");
+					message.append("\n");
+					message.append(range.toString());
+				}
+				
+				if (StringUtil.isEmpty(help))
 				{
 					String msg = MessageFormat.format(Messages.SDKConfigurationEditor_NoHelpAvailable, configKey);
 					Logger.log(SDKConfigUIPlugin.getDefault(), msg);
@@ -746,7 +805,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 					infoDialog.close();
 				}
 				infoDialog = new HelpPopupDialog(activeShell, Messages.SDKConfigurationEditor_Help + " > " + configKey, //$NON-NLS-1$
-						helpInfo); // $NON-NLS-2$
+						message.toString()); // $NON-NLS-2$
 				infoDialog.open();
 
 			}
@@ -803,6 +862,7 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 	public void notifyRequestServed(String message, CommandType type)
 	{
 		this.serverMessage = message;
+		this.type = type;
 		Logger.log(SDKConfigUIPlugin.getDefault(), message);
 
 		if (selectedElement != null)
@@ -826,8 +886,11 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 					@Override
 					public void run()
 					{
-						treeViewer.refresh();
-						updateUI(selectedElement);
+						if (!treeViewer.getControl().isDisposed())
+						{
+							treeViewer.refresh();
+							updateUI(selectedElement);
+						}
 					}
 				});
 			}
@@ -861,5 +924,50 @@ public class SDKConfigurationEditor extends MultiPageEditorPart
 			}
 		}
 
+	}
+
+	private MessageConsole createConsole(String name)
+	{
+		ConsolePlugin plugin = ConsolePlugin.getDefault();
+		IConsoleManager conMan = plugin.getConsoleManager();
+		IConsole[] existing = conMan.getConsoles();
+		for (int i = 0; i < existing.length; i++)
+		{
+			if (name.equals(existing[i].getName()))
+				return (MessageConsole) existing[i];
+		}
+		// no console found, so create a new one
+		MessageConsole myConsole = new MessageConsole(name, null);
+		conMan.addConsoles(new IConsole[] { myConsole });
+		return myConsole;
+	}
+
+	private void openConsoleView()
+	{
+		Display.getDefault().asyncExec(new Runnable()
+		{
+			@Override
+			public void run()
+			{
+				try
+				{
+					PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage()
+							.showView(IConsoleConstants.ID_CONSOLE_VIEW);
+				}
+				catch (PartInitException e)
+				{
+					Logger.log(e);
+				}
+			}
+		});
+	}
+
+	public String getSystemProperty(String option)
+	{
+		if (option == null)
+		{
+			return null;
+		}
+		return System.getProperty(option);
 	}
 }
